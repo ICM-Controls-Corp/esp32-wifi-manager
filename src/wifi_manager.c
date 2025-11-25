@@ -45,6 +45,7 @@ Contains the freeRTOS task and all necessary support
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi_types.h"
+#include "esp_wps.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -141,7 +142,8 @@ const int WIFI_MANAGER_SCAN_BIT = BIT7;
 /* @brief When set, means user requested for a disconnect */
 const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 
-
+// Default configuration of WPS using push button method.
+static esp_wps_config_t wps_config = WPS_CONFIG_INIT_DEFAULT(WPS_TYPE_PBC);
 
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
@@ -170,6 +172,10 @@ void wifi_manager_scan_async(){
 
 void wifi_manager_disconnect_async(){
 	wifi_manager_send_message(WM_ORDER_DISCONNECT_STA, NULL);
+}
+
+void wifi_manager_wps(){
+	wifi_manager_send_message(WM_ORDER_WPS, NULL);
 }
 
 
@@ -702,6 +708,55 @@ static void wifi_manager_event_handler(void* arg, esp_event_base_t event_base, i
 		case WIFI_EVENT_AP_PROBEREQRECVED:
 			ESP_LOGI(TAG, "WIFI_EVENT_AP_PROBEREQRECVED");
 			break;
+
+        case WIFI_EVENT_STA_WPS_ER_SUCCESS:
+            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_SUCCESS");
+            {
+                wifi_event_sta_wps_er_success_t *evt =
+                    (wifi_event_sta_wps_er_success_t *)event_data;
+                int i;
+
+                if (evt) {
+					// If multiple networks have been discovered, then connect to the first option.
+					wifi_config_t* config = wifi_manager_get_wifi_sta_config();
+					memset(config, 0x00, sizeof(wifi_config_t));
+					memcpy(config->sta.ssid, evt->ap_cred[0].ssid, sizeof(config->sta.ssid));
+					memcpy(config->sta.password, evt->ap_cred[0].passphrase, sizeof(config->sta.password));
+                }
+				else
+				{
+					// If one network is found, then the WPS library will automatically configure the connection.
+					// Copy these values into the wifi manager configuration so that they will be saved to nvs. 
+					wifi_config_t wifi_config;
+					esp_wifi_get_config(WIFI_IF_STA, &wifi_config);
+										
+					wifi_config_t* wifi_manager_config = wifi_manager_get_wifi_sta_config();
+
+					memset(wifi_manager_config, 0x00, sizeof(wifi_config_t));
+					memcpy(wifi_manager_config->sta.ssid, wifi_config.sta.ssid, strlen((char *)wifi_config.sta.ssid));
+					memcpy(wifi_manager_config->sta.password, wifi_config.sta.password, strlen((char *)wifi_config.sta.password));
+				}
+
+                // If only one AP credential is received from WPS, there will be no event data and
+                // esp_wifi_set_config() is already called by WPS modules for backward compatibility
+                // with legacy apps. So directly attempt connection here.
+                ESP_ERROR_CHECK(esp_wifi_wps_disable());
+                esp_wifi_connect();
+            }
+            break;
+        case WIFI_EVENT_STA_WPS_ER_FAILED:
+            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_FAILED");
+            ESP_ERROR_CHECK(esp_wifi_wps_disable());
+            ESP_ERROR_CHECK(esp_wifi_wps_enable(&wps_config));
+            ESP_ERROR_CHECK(esp_wifi_wps_start(0));
+            break;
+        case WIFI_EVENT_STA_WPS_ER_TIMEOUT:
+            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_TIMEOUT");
+            ESP_ERROR_CHECK(esp_wifi_wps_disable());
+            ESP_ERROR_CHECK(esp_wifi_wps_enable(&wps_config));
+            ESP_ERROR_CHECK(esp_wifi_wps_start(0));
+            break;
+
 
 		} /* end switch */
 	}
@@ -1321,6 +1376,17 @@ void wifi_manager( void * pvParameters ){
 				if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])(NULL);
 
 				break;
+
+			case WM_ORDER_WPS:
+				ESP_ERROR_CHECK(esp_wifi_disconnect());
+				// WPS only works in station mode.
+				// Web portal setup and WPS setup are mutually exclusive.
+				ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
+				ESP_ERROR_CHECK(esp_wifi_start());
+				
+				ESP_ERROR_CHECK(esp_wifi_wps_enable(&wps_config));
+				ESP_ERROR_CHECK(esp_wifi_wps_start(0));
 
 			default:
 				break;
