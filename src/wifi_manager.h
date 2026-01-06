@@ -340,6 +340,9 @@ void wifi_manager_disconnect_async();
 // Trigger WPS connection method.
 void wifi_manager_wps();
 
+// Returns true if WPS mode is currently active.
+bool wifi_manager_is_wps_active();
+
 /**
  * @brief Tries to get access to json buffer mutex.
  *

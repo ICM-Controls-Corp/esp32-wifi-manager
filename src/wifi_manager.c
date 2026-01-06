@@ -145,6 +145,9 @@ const int WIFI_MANAGER_REQUEST_DISCONNECT_BIT = BIT8;
 // Default configuration of WPS using push button method.
 static esp_wps_config_t wps_config = WPS_CONFIG_INIT_DEFAULT(WPS_TYPE_PBC);
 
+// Flag indicating WPS mode is currently active.
+static volatile bool wifi_manager_wps_active = false;
+
 void wifi_manager_timer_retry_cb( TimerHandle_t xTimer ){
 
 	ESP_LOGI(TAG, "Retry Timer Tick! Sending ORDER_CONNECT_STA with reason CONNECTION_REQUEST_AUTO_RECONNECT");
@@ -176,6 +179,10 @@ void wifi_manager_disconnect_async(){
 
 void wifi_manager_wps(){
 	wifi_manager_send_message(WM_ORDER_WPS, NULL);
+}
+
+bool wifi_manager_is_wps_active(){
+	return wifi_manager_wps_active;
 }
 
 
@@ -741,6 +748,7 @@ static void wifi_manager_event_handler(void* arg, esp_event_base_t event_base, i
                 // esp_wifi_set_config() is already called by WPS modules for backward compatibility
                 // with legacy apps. So directly attempt connection here.
                 ESP_ERROR_CHECK(esp_wifi_wps_disable());
+                wifi_manager_wps_active = false;
                 esp_wifi_connect();
             }
             break;
@@ -1384,9 +1392,11 @@ void wifi_manager( void * pvParameters ){
 				ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
 				ESP_ERROR_CHECK(esp_wifi_start());
-				
+
 				ESP_ERROR_CHECK(esp_wifi_wps_enable(&wps_config));
 				ESP_ERROR_CHECK(esp_wifi_wps_start(0));
+				wifi_manager_wps_active = true;
+				break;
 
 			default:
 				break;
